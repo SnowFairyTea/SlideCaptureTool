@@ -1,0 +1,7 @@
+PyQt5
+pyaudio
+mss
+opencv-python
+Pillow
+reportlab
+openai-whisper
