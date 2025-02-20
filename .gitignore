@@ -2,3 +2,5 @@ settings.json
 captures/
 openai_apikey
 __pycache__
+png
+txt
