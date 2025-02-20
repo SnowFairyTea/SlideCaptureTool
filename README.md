@@ -13,6 +13,7 @@
 - **AI (Whisper)** を活用した文字起こし
     - 自動 or 手動キャプチャごとに区切られた音声を**分割＆文字起こし**
     - 文字起こし結果を `.txt` として保存
+    - **ChatGPT API** を用いて文字起こし結果を読みやすくする機能
 - **PDF生成** (ReportLab / Platypus)
     - 画像と文字起こし結果を丁寧に折り返してレイアウト
     - 日本語フォントを埋め込むことで文字化け回避
@@ -35,7 +36,7 @@
     - あるいは、主要なライブラリを個別に:
         
         ```bash
-        pip install pyqt5 pyaudio mss opencv-python pillow reportlab openai-whisper
+        pip install pyqt5 pyaudio mss opencv-python pillow reportlab openai-whisper openai
         
         ```
         
@@ -64,14 +65,15 @@
     - **手動キャプチャ**: 「手動キャプチャ」ボタンを押すと即時にスクリーンショットを撮り、音声の区間を分割 → Whisper文字起こし
     - **自動キャプチャ**: 「自動キャプチャ開始」ボタンを押すと、画面変化検知により自動でキャプチャ → 音声区間分割＆文字起こし
     - しきい値(変化の閾値)をスピンボックスで調整
-7. **PDF生成**
+7. **要約**
+    - 「要約」ボタンを押すと、文字起こし結果をChatGPT APIを用いて読みやすくし、`{base_name}_refined.txt`として保存します。
+8. **PDF生成**
     - キャプチャされた画像と文字起こし結果をレイアウトした PDF を作成します。
     - 「PDF生成」ボタンを押すと、`result.pdf`が保存先フォルダに作られます
-8. **終了**
+9. **終了**
     - ウィンドウを閉じると、設定（フォルダやしきい値、デバイス選択など）が `settings.json` に保存され、次回起動時に復元されます。
 
 ---
-
 
 ## 依存ライブラリ / バージョン情報
 
@@ -83,11 +85,8 @@
 - [Pillow](https://pypi.org/project/Pillow/)
 - [reportlab](https://pypi.org/project/reportlab/)
 - [openai-whisper](https://github.com/openai/whisper)
+- [openai](https://pypi.org/project/openai/)
 - ffmpeg (外部ツール)
-
-
-
-
 
 ---
 
@@ -95,7 +94,6 @@
 
 - **AI (Whisper) の精度向上**: モデルサイズを大きいものに変えたい場合、`whisper.load_model("large")` などに書き換えてください(動作が重くなる可能性あり)。
 - **画面変化検知アルゴリズム**: 現在は `absdiff` → `sum()` の単純比較です。領域指定やヒストグラム比較などに変更すれば精度を上げられます。
-
 
 ---
 https://opensource.org/license/mit

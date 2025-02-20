@@ -38,6 +38,8 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
+from chatgpt_api import refine_transcription
+
 
 class StereoMixerRecorder(threading.Thread):
     """
@@ -234,7 +236,7 @@ class PDFPlatypusGenerationThread(threading.Thread):
         story = []
         for i, img_file in enumerate(image_files, start=1):
             base_name, _ = os.path.splitext(img_file)
-            txt_file = f"{base_name}.txt"
+            txt_file = f"{base_name}_refined.txt" if os.path.exists(os.path.join(self.save_dir, f"{base_name}_refined.txt")) else f"{base_name}.txt"
             
             # 見出し
             heading = Paragraph(f"画像名: {img_file}", self.styles["Heading"])
@@ -268,7 +270,8 @@ class PDFPlatypusGenerationThread(threading.Thread):
                     text_content = f.read()
             else:
                 text_content = f"{img_file} に対応する文字起こしがありません。"
-
+            #text_content中の改行コードに対応してPDF中でも改行できるようにする
+            text_content = text_content.replace("\n", "<br/>")
             text_para = Paragraph(text_content, self.styles["Japanese"])
             story.append(text_para)
             
@@ -337,7 +340,7 @@ class MirroringWindow(QDialog):
         MSSでモニタをキャプチャ → QLabelに表示
         """
         mon_idx = self.get_monitor_index_callback()
-        if mon_idx is None:
+        if (mon_idx is None) or (mon_idx >= len(self.sct.monitors)):
             return
         
         # mss.monitors[0]は全画面、1,2..が個別モニタ
@@ -375,6 +378,44 @@ class MirroringWindow(QDialog):
         self.timer.stop()
         super().closeEvent(event)
 
+
+class RefineTranscriptionThread(threading.Thread):
+    def __init__(self, txt_path, refined_txt_path, log_queue, model):
+        super().__init__()
+        self.txt_path = txt_path
+        self.refined_txt_path = refined_txt_path
+        self.log_queue = log_queue
+        self.model = model
+
+    def run(self):
+        #self.log_queue.put(f"Refine transcription thread started for: {self.txt_path}")
+        try:
+            with open(self.txt_path, 'r', encoding='utf-8') as file:
+                transcription = file.read()
+            if (len(transcription) < 100):
+                self.log_queue.put(f"文字起こしが短いのでスキップ:{self.refined_txt_path}, {len(transcription)} characters")
+                return
+            
+            #self.refined_txt_pathが既に存在する場合はスキップ
+            if os.path.exists(self.refined_txt_path):
+                self.log_queue.put(f"要約はもうあります: {self.refined_txt_path}")
+                return
+            refined_transcription = refine_transcription(transcription, self.model)
+            with open(self.refined_txt_path, 'w', encoding='utf-8') as file:
+                file.write(refined_transcription)
+            self.log_queue.put(f"要約の保存が完了しました: {self.refined_txt_path}")
+        except Exception as e:
+            self.log_queue.put(f"Error refining transcription: {e}")
+
+
+class CaptureAndTranscribeThread(threading.Thread):
+    def __init__(self, is_auto, main_window):
+        super().__init__()
+        self.is_auto = is_auto
+        self.main_window = main_window
+
+    def run(self):
+        self.main_window.capture_and_transcribe(self.is_auto)
 
 
 class MainWindow(QMainWindow):
@@ -549,7 +590,7 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.auto_stop_btn)
 
         self.manual_cap_btn = QPushButton("手動キャプチャ")
-        self.manual_cap_btn.clicked.connect(lambda: self.capture_and_transcribe(is_auto=False))
+        self.manual_cap_btn.clicked.connect(self.start_capture_and_transcribe_thread)
         btn_layout.addWidget(self.manual_cap_btn)
 
         self.audio_start_btn = QPushButton("録音開始")
@@ -567,6 +608,16 @@ class MainWindow(QMainWindow):
         self.mirror_btn = QPushButton("画面ミラー")
         self.mirror_btn.clicked.connect(self.open_mirroring_window)
         btn_layout.addWidget(self.mirror_btn)
+
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(["gpt-4o-mini", "gpt-4o"])
+
+        self.refine_btn = QPushButton("要約")
+        self.refine_btn.clicked.connect(self.start_refine_transcriptions)
+
+        btn_layout.addWidget(QLabel("モデル:"))
+        btn_layout.addWidget(self.model_combo)
+        btn_layout.addWidget(self.refine_btn)
 
         main_layout.addLayout(btn_layout)
 
@@ -648,6 +699,10 @@ class MainWindow(QMainWindow):
         else:
             self.log_queue.put("自動キャプチャは実行中ではありません。")
 
+    def start_capture_and_transcribe_thread(self):
+        thread = CaptureAndTranscribeThread(is_auto=False, main_window=self)
+        thread.start()
+
     def capture_and_transcribe(self, is_auto=False):
         # 1) 前回キャプチャに対する音声処理
         if self.last_capture_prefix is not None:
@@ -690,6 +745,7 @@ class MainWindow(QMainWindow):
         # WAV保存
         import wave
         p = pyaudio.PyAudio()
+        txt_path = os.path.join(self.save_dir, f"{prefix}.txt")
         wav_path = os.path.join(self.save_dir, f"{prefix}.wav")
         wf = wave.open(wav_path, 'wb')
         wf.setnchannels(2)
@@ -700,9 +756,6 @@ class MainWindow(QMainWindow):
         p.terminate()
 
         self.log_queue.put(f"WAV保存完了: {wav_path}")
-
-        # Whisperで文字起こし
-        txt_path = os.path.join(self.save_dir, f"{prefix}.txt")
         try:
             result = self.whisper_model.transcribe(wav_path)
             text_content = result["text"]
@@ -757,6 +810,26 @@ class MainWindow(QMainWindow):
             return self.monitor_combo.currentData()  # 例: 0,1,2...
         self.mirroring_window = MirroringWindow(get_monitor_index_callback=get_monitor_index, parent=self)
         self.mirroring_window.show()
+
+    def start_refine_transcriptions(self):
+        model = self.model_combo.currentText()
+        transcription_threads=[]
+        for file_name in os.listdir(self.save_dir):
+            if file_name.endswith(".txt") and not file_name.endswith("_refined.txt"):
+                base_name = os.path.splitext(file_name)[0]
+                txt_path = os.path.join(self.save_dir, file_name)
+                refined_txt_path = os.path.join(self.save_dir, f"{base_name}_refined.txt")
+                
+                refine_thread = RefineTranscriptionThread(txt_path, refined_txt_path, self.log_queue, model)
+                refine_thread.start()
+                #スレッドが終わったかどうかを確認するためにリストに追加
+                transcription_threads.append(1)
+
+
+        #全部のスレッドが終わるまで待機
+        #for thread in transcription_threads:
+        #    thread.join()
+        self.log_queue.put(f"{len(transcription_threads)}スレッドを立てました")
 
     # =========================================
     # ログ更新
