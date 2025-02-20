@@ -1,2 +1,4 @@
 setting.json
-capture
+captures/
+openai_apikey
+__pycache__
